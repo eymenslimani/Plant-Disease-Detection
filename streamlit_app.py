@@ -89,4 +89,6 @@ if uploaded_file is not None:
                     # Add assistant response to history
                     st.session_state.messages.append({"role": "assistant", "content": response})
 
-       
+        except Exception as e:
+            st.error(f"Error during analysis: {str(e)}")
+            st.info("Please try again with a different image or check if the model is available.")
