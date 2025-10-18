@@ -9,8 +9,8 @@ from groq import Groq
 hf_client = InferenceClient()
 
 # Set up Groq client with your API key (replace with your new key after regeneration)
-  # Temporary; regenerate and replace
-groq_client = Groq(api_key=GROQ_API_KEY)
+groq_TOKEN = st.secrets["GROQ_API_KEY"]# 
+groq_client = Groq(api_key=groq_TOKEN)
 
 # Placeholder for your Hugging Face model repo
 MODEL_REPO = "eymenslimani/plant-disease-detector"  # Replace with your actual model, e.g., "yourusername/your-plant-model"
