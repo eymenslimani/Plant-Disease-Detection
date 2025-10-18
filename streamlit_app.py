@@ -9,7 +9,7 @@ from groq import Groq
 hf_client = InferenceClient()
 
 # Set up Groq client with your API key (replace with your new key after regeneration)
-GROQ_API_KEY = "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"  # Temporary; regenerate and replace
+  # Temporary; regenerate and replace
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 # Placeholder for your Hugging Face model repo
