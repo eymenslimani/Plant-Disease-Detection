@@ -1,11 +1,13 @@
 import streamlit as st
-from huggingface_hub import InferenceClient
+from huggingface_hub import InferenceClient, hf_hub_download
 from PIL import Image
 import io
 import os
 from groq import Groq
 import requests
 import json
+import torch
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 # Set up Hugging Face Inference Client with token
 hf_token = st.secrets.get("HF_TOKEN", None)  # Get HF token if it exists
@@ -25,27 +27,44 @@ st.write("Upload a photo of a plant leaf to detect if it's healthy or diseased. 
 # Add model status checker in sidebar
 with st.sidebar:
     st.header("🔧 Debug Info")
+    
+    # Model name input for easy correction
+    model_name = st.text_input("Model Repository", value=MODEL_REPO)
+    
     if st.button("Check Model Status"):
         try:
-            API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
+            API_URL = f"https://api-inference.huggingface.co/models/{model_name}"
             headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
             response = requests.get(API_URL, headers=headers)
+            
+            st.write(f"**Testing:** `{model_name}`")
+            st.write(f"**Status Code:** {response.status_code}")
+            
             if response.status_code == 200:
                 st.success("✅ Model is accessible!")
+                st.json(response.json()[:500] if len(str(response.json())) > 500 else response.json())
+            elif response.status_code == 404:
+                st.error("❌ Model NOT FOUND")
+                st.warning("**Possible reasons:**\n1. Model name is incorrect\n2. Model is private and token doesn't have access\n3. Model hasn't been uploaded yet")
+                st.info("👉 Try visiting: https://huggingface.co/" + model_name)
+            elif response.status_code == 401:
+                st.error("❌ Unauthorized - Token issue")
+                st.info("Check your HF_TOKEN in secrets")
             else:
-                st.error(f"❌ Status: {response.status_code}")
-                st.code(response.text)
+                st.error(f"❌ Error: {response.status_code}")
+                with st.expander("See response"):
+                    st.code(response.text[:1000])
         except Exception as e:
             st.error(f"Error: {str(e)}")
     
     st.markdown("---")
-    st.info(f"**Model:** {MODEL_REPO}")
+    st.info(f"**Current Model:** {MODEL_REPO}")
     
-    # Check if HF token is set (optional but helpful)
-    if "HF_TOKEN" in st.secrets:
-        st.success("🔑 HF Token: Set")
+    # Token status
+    if hf_token:
+        st.success(f"🔑 HF Token: Set ({hf_token[:8]}...)")
     else:
-        st.info("🔑 HF Token: Not set (OK for public models)")
+        st.warning("🔑 HF Token: Not set")
     
     st.success("🔑 Groq Token: Set")
 
