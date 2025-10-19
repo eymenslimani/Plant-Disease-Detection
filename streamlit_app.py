@@ -7,8 +7,9 @@ from groq import Groq
 import requests
 import json
 
-# Set up Hugging Face Inference Client
-hf_client = InferenceClient()
+# Set up Hugging Face Inference Client with token
+hf_token = st.secrets.get("HF_TOKEN", None)  # Get HF token if it exists
+hf_client = InferenceClient(token=hf_token)
 
 # Set up Groq client with your API key
 groq_TOKEN = st.secrets["GROQ_API_KEY"]
@@ -27,7 +28,8 @@ with st.sidebar:
     if st.button("Check Model Status"):
         try:
             API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
-            response = requests.get(API_URL)
+            headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
+            response = requests.get(API_URL, headers=headers)
             if response.status_code == 200:
                 st.success("✅ Model is accessible!")
             else:
@@ -77,7 +79,7 @@ if uploaded_file is not None:
                 # Method 2: Direct API call as fallback
                 img_bytes.seek(0)
                 API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
-                headers = {}  # No token needed for public models
+                headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
                 
                 response = requests.post(API_URL, headers=headers, data=img_bytes.read())
                 
