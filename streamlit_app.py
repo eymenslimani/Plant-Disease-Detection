@@ -5,18 +5,18 @@ import io
 import os
 from groq import Groq
 
-# Set up Hugging Face Inference Client (no token needed for public models)
+# Set up Hugging Face Inference Client
 hf_client = InferenceClient()
 
-# Set up Groq client with your API key (replace with your new key after regeneration)
-groq_TOKEN = st.secrets["GROQ_API_KEY"]# 
+# Set up Groq client with your API key
+groq_TOKEN = st.secrets["GROQ_API_KEY"]
 groq_client = Groq(api_key=groq_TOKEN)
 
-# Placeholder for your Hugging Face model repo
-MODEL_REPO = "eymenslimani/plant-disease-detector"  # Replace with your actual model, e.g., "yourusername/your-plant-model"
+# Your Hugging Face model repo
+MODEL_REPO = "eymenslimani/plant-disease-detector"
 
 # Title and description
-st.title("Plant Disease Detection")
+st.title("🌿 Plant Disease Detection")
 st.write("Upload a photo of a plant leaf to detect if it's healthy or diseased. If diseased, chat below for solutions and advice.")
 
 # Image upload
@@ -25,7 +25,7 @@ uploaded_file = st.file_uploader("Choose a plant leaf image...", type=["jpg", "j
 if uploaded_file is not None:
     # Display uploaded image
     image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Image", use_column_width=True)
+    st.image(image, caption="Uploaded Image", use_container_width=True)
 
     # Convert to bytes for inference
     img_bytes = io.BytesIO()
@@ -33,30 +33,54 @@ if uploaded_file is not None:
     img_bytes.seek(0)
 
     # Run inference
-    with st.spinner("Analyzing image..."):
+    with st.spinner("🔍 Analyzing image..."):
         try:
             result = hf_client.image_classification(img_bytes, model=MODEL_REPO)
-            # Assume result is a list of dicts with 'score' and 'label'
-            top_prediction = max(result, key=lambda x: x['score'])
+            
+            # Sort results by confidence score
+            result = sorted(result, key=lambda x: x['score'], reverse=True)
+            
+            # Get top prediction
+            top_prediction = result[0]
             label = top_prediction['label']
             confidence = top_prediction['score'] * 100
 
-            st.success(f"Prediction: {label} (Confidence: {confidence:.2f}%)")
+            # Display prediction with confidence
+            st.success(f"**Prediction:** {label}")
+            st.metric("Confidence", f"{confidence:.2f}%")
+            
+            # Show top 3 predictions
+            with st.expander("View all predictions"):
+                for i, pred in enumerate(result[:3], 1):
+                    st.write(f"{i}. **{pred['label']}** - {pred['score']*100:.2f}%")
 
-            # Check if healthy (adjust based on your model's labels; common pattern is 'healthy' in label)
+            # Check if healthy (adjust based on your model's labels)
             is_healthy = "healthy" in label.lower()
 
             if is_healthy:
-                st.info("The plant appears healthy! No further action needed.")
+                st.info("✅ The plant appears healthy! No further action needed.")
             else:
-                st.warning("Disease detected. Chat below for solutions and advice.")
+                st.warning("⚠️ Disease detected. Chat below for solutions and advice.")
 
                 # Initialize chat session if not exists
                 if "messages" not in st.session_state:
                     st.session_state.messages = []
+                
+                # Store current diagnosis in session state
+                if "current_diagnosis" not in st.session_state or st.session_state.current_diagnosis != label:
+                    st.session_state.current_diagnosis = label
+                    st.session_state.messages = []  # Reset chat for new diagnosis
 
                 # System prompt for LLM, primed with diagnosis
-                system_prompt = f"You are a plant disease expert. The diagnosed disease is '{label}'. Provide practical solutions, treatments, prevention tips, and answer any follow-up questions based on this diagnosis. Be helpful, concise, and use simple language."
+                system_prompt = f"""You are a plant disease expert assistant. The diagnosed disease is '{label}' with {confidence:.1f}% confidence.
+
+Provide:
+1. Brief explanation of the disease
+2. Practical treatment solutions
+3. Prevention tips for the future
+4. Answer any follow-up questions
+
+Be helpful, concise, and use simple language that farmers and gardeners can understand."""
 
                 # Display chat history
                 for message in st.session_state.messages:
@@ -77,18 +101,26 @@ if uploaded_file is not None:
 
                     with st.chat_message("assistant"):
                         with st.spinner("Thinking..."):
-                            chat_completion = groq_client.chat.completions.create(
-                                messages=messages,
-                                model="llama3-8b-8192",  # Free, decent model
-                                temperature=0.7,
-                                max_tokens=512,
-                            )
-                            response = chat_completion.choices[0].message.content
-                            st.markdown(response)
-
-                    # Add assistant response to history
-                    st.session_state.messages.append({"role": "assistant", "content": response})
+                            try:
+                                chat_completion = groq_client.chat.completions.create(
+                                    messages=messages,
+                                    model="llama3-8b-8192",
+                                    temperature=0.7,
+                                    max_tokens=800,
+                                )
+                                response = chat_completion.choices[0].message.content
+                                st.markdown(response)
+                                
+                                # Add assistant response to history
+                                st.session_state.messages.append({"role": "assistant", "content": response})
+                            except Exception as e:
+                                st.error(f"Error generating response: {str(e)}")
+                                st.info("Please try asking again.")
 
         except Exception as e:
-            st.error(f"Error during analysis: {str(e)}")
-            st.info("Please try again with a different image or check if the model is available.")
+            st.error(f"❌ Error during analysis: {str(e)}")
+            st.info("Possible issues:\n- Model is still loading (wait a few minutes)\n- Image format not supported\n- Network connectivity issues\n\nPlease try again in a moment.")
+
+# Add footer with info
+st.markdown("---")
+st.markdown("💡 **Tip:** For best results, upload clear, well-lit images of plant leaves.")
