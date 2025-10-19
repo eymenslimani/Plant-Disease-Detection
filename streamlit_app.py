@@ -84,28 +84,80 @@ if uploaded_file is not None:
     # Run inference
     with st.spinner("🔍 Analyzing image..."):
         try:
-            # Method 1: Try InferenceClient first
-            img_bytes.seek(0)
+            # Method 1: Try loading model directly with transformers
+            @st.cache_resource
+            def load_model():
+                try:
+                    processor = AutoImageProcessor.from_pretrained(MODEL_REPO, token=hf_token, trust_remote_code=True)
+                    model = AutoModelForImageClassification.from_pretrained(
+                        MODEL_REPO, 
+                        token=hf_token,
+                        trust_remote_code=True
+                    )
+                    return processor, model
+                except Exception as e:
+                    st.error(f"Model loading error: {str(e)}")
+                    raise
+            
             try:
-                result = hf_client.image_classification(
-                    img_bytes, 
-                    model=MODEL_REPO,
-                )
+                with st.spinner("Loading model from HuggingFace... (this may take a minute on first load)"):
+                    processor, model = load_model()
+                
+                # Process image
+                inputs = processor(images=image, return_tensors="pt")
+                
+                # Get predictions
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                    logits = outputs.logits
+                    probs = torch.nn.functional.softmax(logits, dim=-1)
+                    
+                # Get top predictions
+                top_probs, top_indices = torch.topk(probs, k=min(3, len(model.config.id2label)))
+                
+                result = []
+                for prob, idx in zip(top_probs[0], top_indices[0]):
+                    result.append({
+                        'label': model.config.id2label[idx.item()],
+                        'score': prob.item()
+                    })
+                
+                st.success("✅ Using direct model loading")
+                
             except Exception as e1:
-                st.warning(f"InferenceClient failed: {str(e1)}")
-                st.info("Trying alternative method...")
+                error_msg = str(e1)
+                st.warning(f"Direct loading failed: {error_msg[:200]}...")
                 
-                # Method 2: Direct API call as fallback
+                # Show detailed error
+                with st.expander("🔍 See full error"):
+                    st.code(error_msg)
+                
+                st.info("Trying InferenceClient...")
+                
+                # Method 2: Try InferenceClient
                 img_bytes.seek(0)
-                API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
-                headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
-                
-                response = requests.post(API_URL, headers=headers, data=img_bytes.read())
-                
-                if response.status_code != 200:
-                    raise Exception(f"API returned status code {response.status_code}: {response.text}")
-                
-                result = response.json()
+                try:
+                    result = hf_client.image_classification(
+                        img_bytes, 
+                        model=MODEL_REPO,
+                    )
+                except Exception as e2:
+                    st.warning(f"InferenceClient failed: {str(e2)[:100]}")
+                    st.info("Trying direct API call...")
+                    
+                    # Method 3: Direct API call as fallback
+                    img_bytes.seek(0)
+                    API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
+                    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
+                    
+                    response = requests.post(API_URL, headers=headers, data=img_bytes.read())
+                    
+                    if response.status_code == 503:
+                        raise Exception("Model is loading on HuggingFace servers. Please wait 1-2 minutes and try again.")
+                    elif response.status_code != 200:
+                        raise Exception(f"API returned status code {response.status_code}: {response.text[:200]}")
+                    
+                    result = response.json()
             
             # Sort results by confidence score
             result = sorted(result, key=lambda x: x['score'], reverse=True)
