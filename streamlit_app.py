@@ -4,6 +4,8 @@ from PIL import Image
 import io
 import os
 from groq import Groq
+import requests
+import json
 
 # Set up Hugging Face Inference Client
 hf_client = InferenceClient()
@@ -18,6 +20,32 @@ MODEL_REPO = "eymenslimani/plant-disease-detector"
 # Title and description
 st.title("🌿 Plant Disease Detection")
 st.write("Upload a photo of a plant leaf to detect if it's healthy or diseased. If diseased, chat below for solutions and advice.")
+
+# Add model status checker in sidebar
+with st.sidebar:
+    st.header("🔧 Debug Info")
+    if st.button("Check Model Status"):
+        try:
+            API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
+            response = requests.get(API_URL)
+            if response.status_code == 200:
+                st.success("✅ Model is accessible!")
+            else:
+                st.error(f"❌ Status: {response.status_code}")
+                st.code(response.text)
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+    
+    st.markdown("---")
+    st.info(f"**Model:** {MODEL_REPO}")
+    
+    # Check if HF token is set (optional but helpful)
+    if "HF_TOKEN" in st.secrets:
+        st.success("🔑 HF Token: Set")
+    else:
+        st.info("🔑 HF Token: Not set (OK for public models)")
+    
+    st.success("🔑 Groq Token: Set")
 
 # Image upload
 uploaded_file = st.file_uploader("Choose a plant leaf image...", type=["jpg", "jpeg", "png"])
@@ -35,7 +63,28 @@ if uploaded_file is not None:
     # Run inference
     with st.spinner("🔍 Analyzing image..."):
         try:
-            result = hf_client.image_classification(img_bytes, model=MODEL_REPO)
+            # Method 1: Try InferenceClient first
+            img_bytes.seek(0)
+            try:
+                result = hf_client.image_classification(
+                    img_bytes, 
+                    model=MODEL_REPO,
+                )
+            except Exception as e1:
+                st.warning(f"InferenceClient failed: {str(e1)}")
+                st.info("Trying alternative method...")
+                
+                # Method 2: Direct API call as fallback
+                img_bytes.seek(0)
+                API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
+                headers = {}  # No token needed for public models
+                
+                response = requests.post(API_URL, headers=headers, data=img_bytes.read())
+                
+                if response.status_code != 200:
+                    raise Exception(f"API returned status code {response.status_code}: {response.text}")
+                
+                result = response.json()
             
             # Sort results by confidence score
             result = sorted(result, key=lambda x: x['score'], reverse=True)
@@ -119,7 +168,14 @@ Be helpful, concise, and use simple language that farmers and gardeners can unde
 
         except Exception as e:
             st.error(f"❌ Error during analysis: {str(e)}")
-            st.info("Possible issues:\n- Model is still loading (wait a few minutes)\n- Image format not supported\n- Network connectivity issues\n\nPlease try again in a moment.")
+            
+            # Show detailed error for debugging
+            with st.expander("🔍 See detailed error"):
+                st.code(str(e))
+                import traceback
+                st.code(traceback.format_exc())
+            
+            st.info("**Possible issues:**\n\n1. **Model is still loading** - Wait 5-10 minutes after uploading your model\n2. **Image format issue** - Try a different image or convert to JPG\n3. **Model not public** - Check if your model is set to public on Hugging Face\n4. **Network issues** - Refresh and try again\n\n💡 **Quick fix:** Visit your model page at https://huggingface.co/eymenslimani/plant-disease-detector and try the Inference API widget there first.")
 
 # Add footer with info
 st.markdown("---")
