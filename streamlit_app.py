@@ -102,58 +102,83 @@ with st.sidebar:
 # Load model with better error handling
 @st.cache_resource(show_spinner=False)
 def load_model():
-    """Load model with exponential backoff retry"""
-    max_retries = 3
-    base_delay = 5
+    """Load model with proper error handling for PyTorch 2.6+"""
     
-    files_to_try = [
-        ("model.safetensors", lambda p: load_file(p)),
-        ("best_model.pth", lambda p: torch.load(p, map_location='cpu'))
+    # Try different model files and configurations
+    configs_to_try = [
+        # (filename, load_function, model_architecture)
+        ("best_model.pth", lambda p: torch.load(p, map_location='cpu', weights_only=False), 'tf_efficientnetv2_m.in21k_ft_in1k'),
+        ("model.safetensors", lambda p: load_file(p), 'tf_efficientnetv2_m.in21k_ft_in1k'),
     ]
     
-    for file_name, load_fn in files_to_try:
-        for attempt in range(max_retries):
+    for file_name, load_fn, arch in configs_to_try:
+        try:
+            st.info(f"🔄 Downloading {file_name}...")
+            
+            weights_path = hf_hub_download(
+                repo_id=MODEL_REPO,
+                filename=file_name,
+                token=hf_token,
+                cache_dir="./model_cache"
+            )
+            
+            st.success(f"✅ Downloaded {file_name}")
+            st.info(f"📦 Loading weights...")
+            
+            # Load state dict
+            state_dict = load_fn(weights_path)
+            
+            # Handle different state dict formats
+            if isinstance(state_dict, dict) and 'state_dict' in state_dict:
+                state_dict = state_dict['state_dict']
+            elif isinstance(state_dict, dict) and 'model' in state_dict:
+                state_dict = state_dict['model']
+            
+            # Create model
+            st.info(f"🏗️ Creating model architecture...")
+            model = timm.create_model(
+                arch,
+                pretrained=False,
+                num_classes=NUM_CLASSES
+            )
+            
+            # Load weights with strict=False to allow partial loading
             try:
-                st.info(f"🔄 Downloading {file_name} (attempt {attempt + 1}/{max_retries})...")
-                
-                weights_path = hf_hub_download(
-                    repo_id=MODEL_REPO,
-                    filename=file_name,
-                    token=hf_token,
-                    cache_dir="./model_cache"
-                )
-                
-                st.success(f"✅ Downloaded {file_name}")
-                state_dict = load_fn(weights_path)
-                
-                # Create model
-                model = timm.create_model(
-                    'tf_efficientnetv2_m.in21k_ft_in1k',
-                    pretrained=False,
-                    num_classes=NUM_CLASSES
-                )
-                model.load_state_dict(state_dict)
-                model.eval()
-                
-                return model, file_name
-                
-            except Exception as e:
-                error_msg = str(e)
-                st.warning(f"⚠️ Attempt {attempt + 1} failed: {error_msg[:100]}")
-                
-                if "500" in error_msg or "Internal Server Error" in error_msg:
-                    st.error("🚨 Hugging Face server error (500). This is a server-side issue.")
-                
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)  # Exponential backoff
-                    st.info(f"⏳ Waiting {delay} seconds before retry...")
-                    time.sleep(delay)
+                model.load_state_dict(state_dict, strict=True)
+                st.success(f"✅ Model loaded successfully from {file_name}")
+            except RuntimeError as e:
+                if "size mismatch" in str(e):
+                    st.warning(f"⚠️ Size mismatch detected, trying non-strict loading...")
+                    model.load_state_dict(state_dict, strict=False)
+                    st.success(f"✅ Model loaded (non-strict) from {file_name}")
                 else:
-                    if file_name == files_to_try[-1][0]:  # Last file, last attempt
-                        st.error(f"❌ Failed to load model after all attempts")
-                        raise Exception(f"Could not load model from HuggingFace: {error_msg}")
+                    raise
+            
+            model.eval()
+            return model, file_name
+            
+        except Exception as e:
+            error_msg = str(e)
+            st.warning(f"❌ Failed to load {file_name}: {error_msg[:150]}...")
+            continue
     
-    raise Exception("No model files could be loaded")
+    # If all attempts fail, show detailed error
+    st.error("❌ Could not load model from any available file")
+    st.error("""
+    **Possible Solutions:**
+    
+    1. **Re-export your model**: The model architecture doesn't match the saved weights.
+       ```python
+       # In your training script, save with:
+       torch.save(model.state_dict(), 'best_model.pth')
+       ```
+    
+    2. **Check NUM_CLASSES**: Make sure NUM_CLASSES matches your training (currently: {})
+    
+    3. **Manual fix**: Download the model and check the architecture used during training
+    """.format(NUM_CLASSES))
+    
+    raise Exception("Failed to load model from HuggingFace")
 
 # Preprocessing
 @st.cache_resource
