@@ -14,14 +14,20 @@ from safetensors.torch import load_file
 # Set page config
 st.set_page_config(page_title="Plant Disease Detector", page_icon="🌿", layout="wide")
 
-# Set up tokens
+# Set up tokens with user input fallback
 hf_token = st.secrets.get("HF_TOKEN", None)
-groq_TOKEN = st.secrets.get("GROQ_API_KEY", None)
+groq_token = st.secrets.get("GROQ_API_KEY", None)
 
-if groq_TOKEN:
-    groq_client = Groq(api_key=groq_TOKEN)
-else:
-    st.error("❌ GROQ_API_KEY not found in secrets!")
+if not groq_token:
+    groq_token = st.sidebar.text_input("Enter GROQ_API_KEY", type="password")
+    if not groq_token:
+        st.sidebar.error("❌ GROQ_API_KEY not set! Please enter a valid API key.")
+        st.stop()
+
+try:
+    groq_client = Groq(api_key=groq_token)
+except Exception as e:
+    st.sidebar.error(f"❌ Invalid GROQ_API_KEY: {str(e)}")
     st.stop()
 
 # Model repository
@@ -67,7 +73,7 @@ with st.sidebar:
     else:
         st.warning("🔑 HF Token: Not set")
     
-    if groq_TOKEN:
+    if groq_token:
         st.success("🔑 Groq Token: Set")
 
 # Load model and labels
