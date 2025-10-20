@@ -2,7 +2,7 @@ import streamlit as st
 from huggingface_hub import hf_hub_download
 from PIL import Image
 import numpy as np
-import time
+import json
 from groq import Groq
 import requests
 import torch
@@ -26,55 +26,6 @@ else:
 
 # Model repository
 MODEL_REPO = "eymenslimani/plant-disease-detector"
-
-# PlantDoc Dataset - 27 classes
-LABELS_27 = [
-    "Apple_leaf",
-    "Apple_rust_leaf",
-    "Bell_pepper_leaf",
-    "Blueberry_leaf",
-    "Cherry_leaf",
-    "Corn_Gray_leaf_spot",
-    "Corn_leaf_blight",
-    "Peach_leaf",
-    "Potato_leaf_early_blight",
-    "Potato_leaf_late_blight",
-    "Raspberry_leaf",
-    "Soyabean_leaf",
-    "Soybean_leaf",
-    "Squash_Powdery_mildew_leaf",
-    "Strawberry_leaf",
-    "Tomato_Early_blight_leaf",
-    "Tomato_Septoria_leaf_spot",
-    "Tomato_leaf",
-    "Tomato_leaf_bacterial_spot",
-    "Tomato_leaf_late_blight",
-    "Tomato_leaf_mosaic_virus",
-    "Tomato_leaf_yellow_virus",
-    "Tomato_mold_leaf",
-    "Tomato_two_spotted_spider_mites_leaf",
-    "grape_leaf",
-    "grape_leaf_black_rot",
-    "Corn_rust_leaf"
-]
-
-# Alternative 38 classes (PlantVillage style)
-LABELS_38 = [
-    "Apple_Apple_scab", "Apple_Black_rot", "Apple_Cedar_apple_rust", "Apple_healthy",
-    "Blueberry_healthy", "Cherry_(including_sour)_Powdery_mildew", "Cherry_(including_sour)_healthy",
-    "Corn_(maize)_Cercospora_leaf_spot_Gray_leaf_spot", "Corn_(maize)_Common_rust_",
-    "Corn_(maize)_Northern_Leaf_Blight", "Corn_(maize)_healthy",
-    "Grape_Black_rot", "Grape_Esca_(Black_Measles)", "Grape_Leaf_blight_(Isariopsis_Leaf_Spot)", "Grape_healthy",
-    "Orange_Haunglongbing_(Citrus_greening)", "Peach_Bacterial_spot", "Peach_healthy",
-    "Pepper,_bell_Bacterial_spot", "Pepper,_bell_healthy",
-    "Potato_Early_blight", "Potato_Late_blight", "Potato_healthy",
-    "Raspberry_healthy", "Soybean_healthy",
-    "Squash_Powdery_mildew", "Strawberry_Leaf_scorch", "Strawberry_healthy",
-    "Tomato_Bacterial_spot", "Tomato_Early_blight", "Tomato_Late_blight", "Tomato_Leaf_Mold",
-    "Tomato_Septoria_leaf_spot", "Tomato_Spider_mites_Two-spotted_spider_mite",
-    "Tomato_Target_Spot", "Tomato_Tomato_Yellow_Leaf_Curl_Virus", "Tomato_Tomato_mosaic_virus",
-    "Tomato_healthy"
-]
 
 # Title
 st.title("🌿 Plant Disease Detection")
@@ -119,23 +70,47 @@ with st.sidebar:
     if groq_TOKEN:
         st.success("🔑 Groq Token: Set")
 
-# Load model
+# Load model and labels
 @st.cache_resource(show_spinner=False)
-def load_model():
-    """Load model with auto-detection of num_classes"""
+def load_model_and_labels():
+    """Load model and try to get labels from config"""
     
-    # Try different file formats and class counts
+    # Try to load label mapping from HF repo
+    label_files_to_try = ["config.json", "label_map.json", "labels.json", "id2label.json"]
+    labels = None
+    
+    for label_file in label_files_to_try:
+        try:
+            config_path = hf_hub_download(
+                repo_id=MODEL_REPO,
+                filename=label_file,
+                token=hf_token,
+                cache_dir="./model_cache"
+            )
+            with open(config_path, 'r') as f:
+                config_data = json.load(f)
+                
+            if 'id2label' in config_data:
+                labels = {int(k): v for k, v in config_data['id2label'].items()}
+                st.success(f"✅ Loaded labels from {label_file}")
+                break
+            elif 'labels' in config_data:
+                labels = {i: label for i, label in enumerate(config_data['labels'])}
+                st.success(f"✅ Loaded labels from {label_file}")
+                break
+        except:
+            continue
+    
+    # Try different file formats
     configs = [
         ("model.safetensors", load_file),
         ("best_model.pth", lambda p: torch.load(p, map_location='cpu', weights_only=False)),
         ("pytorch_model.bin", lambda p: torch.load(p, map_location='cpu', weights_only=False)),
     ]
     
-    num_classes_to_try = [27, 38, 30, 37, 39]  # Common numbers
-    
     for file_name, load_fn in configs:
         try:
-            st.info(f"🔄 Trying {file_name}...")
+            st.info(f"🔄 Loading {file_name}...")
             
             weights_path = hf_hub_download(
                 repo_id=MODEL_REPO,
@@ -144,9 +119,6 @@ def load_model():
                 cache_dir="./model_cache"
             )
             
-            st.success(f"✅ Downloaded {file_name}")
-            
-            # Load state dict
             state_dict = load_fn(weights_path)
             
             # Handle nested dicts
@@ -156,60 +128,43 @@ def load_model():
                 elif 'model' in state_dict:
                     state_dict = state_dict['model']
             
-            # Try to detect num_classes from the state dict
+            # Detect num_classes from state dict
             detected_classes = None
             for key in state_dict.keys():
                 if 'classifier' in key and 'weight' in key:
                     weight_shape = state_dict[key].shape
                     if len(weight_shape) >= 1:
                         detected_classes = weight_shape[0]
-                        st.info(f"🔍 Detected {detected_classes} classes from model weights")
+                        st.info(f"🔍 Detected {detected_classes} classes")
                         break
             
-            # Add detected classes to the list to try first
-            if detected_classes and detected_classes not in num_classes_to_try:
-                num_classes_to_try.insert(0, detected_classes)
+            if detected_classes is None:
+                continue
             
-            # Try different numbers of classes
-            for num_classes in num_classes_to_try:
-                try:
-                    st.info(f"🏗️ Trying with {num_classes} classes...")
-                    
-                    model = timm.create_model(
-                        'tf_efficientnetv2_m.in21k_ft_in1k',
-                        pretrained=False,
-                        num_classes=num_classes
-                    )
-                    
-                    # Try loading
-                    model.load_state_dict(state_dict, strict=True)
-                    st.success(f"✅ Success! Model has {num_classes} classes")
-                    
-                    model.eval()
-                    
-                    # Select appropriate labels
-                    if num_classes == 27:
-                        labels = LABELS_27
-                    elif num_classes == 38:
-                        labels = LABELS_38
-                    else:
-                        labels = [f"Class_{i}" for i in range(num_classes)]
-                    
-                    return model, file_name, num_classes, labels
-                    
-                except RuntimeError as e:
-                    if "size mismatch" not in str(e):
-                        st.warning(f"⚠️ {num_classes} classes: {str(e)[:80]}")
-                    continue
+            # Create model
+            st.info(f"🏗️ Creating model with {detected_classes} classes...")
+            model = timm.create_model(
+                'tf_efficientnetv2_m.in21k_ft_in1k',
+                pretrained=False,
+                num_classes=detected_classes
+            )
             
-            st.warning(f"❌ Could not match any class count for {file_name}")
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            
+            # Use loaded labels or create generic ones
+            if labels is None:
+                labels = {i: f"Disease_Class_{i}" for i in range(detected_classes)}
+                st.warning(f"⚠️ Using generic labels. Upload label_map.json to your model repo for proper names.")
+            
+            st.success(f"✅ Model loaded successfully!")
+            return model, file_name, detected_classes, labels
             
         except Exception as e:
             st.warning(f"⚠️ {file_name}: {str(e)[:100]}")
             continue
     
-    st.error("❌ Could not load model with any configuration")
-    st.error("Try checking your model file or contact the model creator")
+    st.error("❌ Could not load model")
     raise Exception("Failed to load model")
 
 # Preprocessing
@@ -229,16 +184,14 @@ if uploaded_file is not None:
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.image(image, caption="Uploaded Image")
+        st.image(image, caption="Uploaded Image", use_container_width=True)
     
     with col2:
         with st.spinner("🔍 Analyzing..."):
             try:
                 # Load model
-                model, model_file, num_classes, labels = load_model()
+                model, model_file, num_classes, labels = load_model_and_labels()
                 processor = get_processor()
-                
-                st.info(f"📊 Using model with {num_classes} classes")
                 
                 # Process image
                 img_array = np.array(image.convert("RGB"))
@@ -256,10 +209,11 @@ if uploaded_file is not None:
                 result = []
                 for prob, idx in zip(top_probs[0], top_indices[0]):
                     idx_val = idx.item()
-                    label = labels[idx_val] if idx_val < len(labels) else f"Class_{idx_val}"
+                    label = labels.get(idx_val, f"Class_{idx_val}")
                     result.append({
                         'label': label,
-                        'score': prob.item()
+                        'score': prob.item(),
+                        'index': idx_val
                     })
                 
                 # Display prediction
@@ -267,79 +221,114 @@ if uploaded_file is not None:
                 label = top_prediction['label']
                 confidence = top_prediction['score'] * 100
                 
-                st.success(f"**Prediction:** {label}")
-                st.metric("Confidence", f"{confidence:.2f}%")
+                # Better formatting for the prediction
+                st.markdown("### 🎯 Diagnosis Result")
+                st.success(f"**{label}**")
+                st.metric("Confidence Level", f"{confidence:.1f}%")
                 
-                with st.expander("📊 Top 5 predictions"):
+                with st.expander("📊 View Top 5 Predictions"):
                     for i, pred in enumerate(result[:5], 1):
-                        st.write(f"{i}. **{pred['label']}** - {pred['score']*100:.2f}%")
+                        confidence_bar = "█" * int(pred['score'] * 20)
+                        st.write(f"{i}. **{pred['label']}**")
+                        st.progress(pred['score'])
+                        st.caption(f"{pred['score']*100:.2f}%")
+                        st.markdown("---")
                 
             except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
-                with st.expander("🔍 Details"):
+                st.error(f"❌ Error during prediction: {str(e)}")
+                with st.expander("🔍 Error Details"):
                     import traceback
                     st.code(traceback.format_exc())
                 st.stop()
     
-    # Check if healthy or disease
-    is_disease = any(keyword in label.lower() for keyword in 
-                    ['blight', 'rust', 'spot', 'rot', 'virus', 'mildew', 'mites', 'mold', 'scab', 'scorch'])
+    # Always show chat interface
+    st.markdown("---")
+    st.markdown("## 💬 Ask Plant Disease Expert")
     
-    if not is_disease and 'healthy' not in label.lower():
-        st.info("ℹ️ Classification complete. Check the disease keywords for details.")
-    elif 'healthy' in label.lower():
-        st.success("✅ The plant appears healthy!")
+    # Check if it's a disease or healthy
+    is_healthy = 'healthy' in label.lower()
+    
+    if is_healthy:
+        st.success("✅ The plant appears healthy! You can still ask questions below.")
+        initial_context = f"This plant appears to be healthy ({label}). "
     else:
-        st.warning("⚠️ Disease detected. Get advice below.")
-        
-        # Initialize chat
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-        
-        if "current_diagnosis" not in st.session_state or st.session_state.current_diagnosis != label:
-            st.session_state.current_diagnosis = label
-            st.session_state.messages = []
-        
-        # System prompt
-        system_prompt = f"""You are a plant disease expert. Diagnosed: '{label}' ({confidence:.1f}% confidence).
+        st.warning("⚠️ Disease or issue detected. Get expert advice below.")
+        initial_context = f"Detected condition: {label} with {confidence:.1f}% confidence. "
+    
+    # Initialize chat
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    
+    if "current_diagnosis" not in st.session_state or st.session_state.current_diagnosis != label:
+        st.session_state.current_diagnosis = label
+        st.session_state.messages = []
+    
+    # System prompt
+    system_prompt = f"""You are an expert plant pathologist and agricultural advisor. 
 
-Provide:
-1. Disease explanation
-2. Treatment solutions
-3. Prevention tips
-4. Answer questions
+Current diagnosis: '{label}' (Confidence: {confidence:.1f}%)
 
-Be concise and clear."""
+Your role:
+1. Explain what this diagnosis means in clear, simple terms
+2. Provide specific treatment recommendations
+3. Suggest prevention strategies
+4. Answer any follow-up questions about plant care
+5. If the label is generic (like "Class_X"), acknowledge this and provide general plant disease advice
+
+Be practical, concise, and farmer-friendly in your responses."""
+    
+    # Show chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Auto-generate first response if no messages
+    if len(st.session_state.messages) == 0:
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing diagnosis..."):
+                try:
+                    initial_prompt = f"Based on the diagnosis of '{label}', please provide: 1) What this means, 2) Treatment recommendations, 3) Prevention tips. Keep it concise and practical."
+                    
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": initial_prompt}
+                    ]
+                    
+                    chat_completion = groq_client.chat.completions.create(
+                        messages=messages,
+                        model="llama3-8b-8192",
+                        temperature=0.7,
+                        max_tokens=1000,
+                    )
+                    response = chat_completion.choices[0].message.content
+                    st.markdown(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    st.error(f"Error generating advice: {str(e)}")
+    
+    # Chat input
+    if prompt := st.chat_input("Ask about treatment, prevention, or care..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
         
-        # Chat interface
-        st.markdown("### 💬 Ask for Solutions")
+        messages = [{"role": "system", "content": system_prompt}] + st.session_state.messages
         
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-        
-        if prompt := st.chat_input("Ask about treatment..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-            
-            messages = [{"role": "system", "content": system_prompt}] + st.session_state.messages
-            
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    try:
-                        chat_completion = groq_client.chat.completions.create(
-                            messages=messages,
-                            model="llama3-8b-8192",
-                            temperature=0.7,
-                            max_tokens=800,
-                        )
-                        response = chat_completion.choices[0].message.content
-                        st.markdown(response)
-                        st.session_state.messages.append({"role": "assistant", "content": response})
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    chat_completion = groq_client.chat.completions.create(
+                        messages=messages,
+                        model="llama3-8b-8192",
+                        temperature=0.7,
+                        max_tokens=1000,
+                    )
+                    response = chat_completion.choices[0].message.content
+                    st.markdown(response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
 
 # Footer
 st.markdown("---")
-st.markdown("💡 **Tip:** Use clear, well-lit images for best results.")
+st.markdown("💡 **Tip:** For best results, use clear, well-lit photos showing the affected leaf area.")
