@@ -27,22 +27,17 @@ else:
 # Model repository
 MODEL_REPO = "eymenslimani/plant-disease-detector"
 
-# Class labels (37 classes)
+# Class labels (27 classes from PlantDoc dataset)
 LABELS = [
-    "Apple_Scab_Leaf", "Apple_cedar_apple_rust_leaf", "Apple_healthy_leaf",
-    "Bell_pepper_Bacterial_spot_leaf", "Bell_pepper_healthy_leaf",
-    "Blueberry_healthy_leaf", "Cherry_Powdery_mildew_leaf", "Cherry_healthy_leaf",
-    "Corn_Common_rust_leaf", "Corn_Gray_leaf_spot_leaf", "Corn_Northern_Leaf_Blight_leaf",
-    "Corn_healthy_leaf", "Grape_Black_Measles_leaf", "Grape_Black_rot_leaf",
-    "Grape_Leaf_blight_leaf", "Grape_healthy_leaf", "Peach_Bacterial_spot_leaf",
-    "Peach_healthy_leaf", "Potato_Early_blight_leaf", "Potato_Late_blight_leaf",
-    "Potato_healthy_leaf", "Raspberry_healthy_leaf", "Soybean_healthy_leaf",
-    "Squash_Powdery_mildew_leaf", "Strawberry_Leaf_scorch_leaf", "Strawberry_healthy_leaf",
-    "Tomato_Early_blight_leaf", "Tomato_Late_blight_leaf", "Tomato_Leaf_Mold_leaf",
-    "Tomato_Septoria_leaf_spot_leaf", "Tomato_Spider_mites_Two_spotted_spider_mite_leaf",
-    "Tomato_Target_Spot_leaf", "Tomato_Tomato_YellowLeaf_Curl_Virus_leaf",
-    "Tomato_Tomato_mosaic_virus_leaf", "Tomato_bacterial_spot_leaf", "Tomato_healthy_leaf",
-    "grape_leaf_black_rot"
+    "Apple___Apple_scab", "Apple___Black_rot", "Apple___Cedar_apple_rust", "Apple___healthy",
+    "Blueberry___healthy", "Cherry_(including_sour)___Powdery_mildew", "Cherry_(including_sour)___healthy",
+    "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot", "Corn_(maize)___Common_rust_",
+    "Corn_(maize)___Northern_Leaf_Blight", "Corn_(maize)___healthy",
+    "Grape___Black_rot", "Grape___Esca_(Black_Measles)", "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
+    "Grape___healthy", "Orange___Haunglongbing_(Citrus_greening)", "Peach___Bacterial_spot",
+    "Peach___healthy", "Pepper,_bell___Bacterial_spot", "Pepper,_bell___healthy",
+    "Potato___Early_blight", "Potato___Late_blight", "Potato___healthy",
+    "Raspberry___healthy", "Soybean___healthy", "Squash___Powdery_mildew", "Strawberry___Leaf_scorch"
 ]
 NUM_CLASSES = len(LABELS)
 ID2LABEL = {i: label for i, label in enumerate(LABELS)}
