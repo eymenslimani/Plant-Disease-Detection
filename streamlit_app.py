@@ -106,8 +106,8 @@ if uploaded_file is not None:
             # Load model with caching and retry mechanism
             @st.cache_resource
             def load_model():
-                max_retries = 3
-                retry_delay = 10  # seconds
+                max_retries = 5
+                retry_delay = 15  # Increased delay to handle server issues
                 files_to_try = ["model.safetensors", "best_model.pth"]
                 
                 for file in files_to_try:
@@ -125,6 +125,11 @@ if uploaded_file is not None:
                                 time.sleep(retry_delay)
                             else:
                                 st.error(f"Failed to load {file} after {max_retries} attempts")
+                                # Manual fallback option
+                                st.warning("HF download failed. As a workaround, manually download 'model.safetensors' or 'best_model.pth' from https://huggingface.co/eymenslimani/plant-disease-detector, place it in your project folder, and update weights_path below with the local path.")
+                                # Uncomment and set local path if using fallback
+                                # weights_path = "/local/path/to/model.safetensors"
+                                # state_dict = load_file(weights_path)
                                 raise
                     else:
                         continue
@@ -258,7 +263,7 @@ Be helpful, concise, and use simple language that farmers and gardeners can unde
                 import traceback
                 st.code(traceback.format_exc())
             
-            st.info("**Possible issues:**\n\n1. **Model is still loading** - Wait 5-10 minutes after uploading\n2. **Image format issue** - Try JPG\n3. **Dependencies missing** - Check requirements.txt\n4. **Network issues** - Refresh\n5. **HF Server Issue** - Try again later or contact HF support\n\n💡 Test model at https://huggingface.co/eymenslimani/plant-disease-detector")
+            st.info("**Possible issues:**\n\n1. **Model is still loading** - Wait 15-30 minutes after uploading\n2. **Image format issue** - Try JPG\n3. **Dependencies missing** - Check requirements.txt\n4. **Network issues** - Refresh\n5. **HF Server Issue** - Try again later or contact HF support at https://huggingface.co/docs/hub/support\n\n💡 Test model at https://huggingface.co/eymenslimani/plant-disease-detector")
 
 # Add footer with info
 st.markdown("---")
