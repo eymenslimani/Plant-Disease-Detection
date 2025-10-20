@@ -27,19 +27,38 @@ else:
 # Model repository
 MODEL_REPO = "eymenslimani/plant-disease-detector"
 
-# Class labels (27 classes from PlantDoc dataset)
+# PlantDoc Dataset - 27 classes (CORRECTED)
 LABELS = [
-    "Apple___Apple_scab", "Apple___Black_rot", "Apple___Cedar_apple_rust", "Apple___healthy",
-    "Blueberry___healthy", "Cherry_(including_sour)___Powdery_mildew", "Cherry_(including_sour)___healthy",
-    "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot", "Corn_(maize)___Common_rust_",
-    "Corn_(maize)___Northern_Leaf_Blight", "Corn_(maize)___healthy",
-    "Grape___Black_rot", "Grape___Esca_(Black_Measles)", "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
-    "Grape___healthy", "Orange___Haunglongbing_(Citrus_greening)", "Peach___Bacterial_spot",
-    "Peach___healthy", "Pepper,_bell___Bacterial_spot", "Pepper,_bell___healthy",
-    "Potato___Early_blight", "Potato___Late_blight", "Potato___healthy",
-    "Raspberry___healthy", "Soybean___healthy", "Squash___Powdery_mildew", "Strawberry___Leaf_scorch"
+    "Apple_leaf",
+    "Apple_rust_leaf",
+    "Bell_pepper_leaf",
+    "Blueberry_leaf",
+    "Cherry_leaf",
+    "Corn_Gray_leaf_spot",
+    "Corn_leaf_blight",
+    "Peach_leaf",
+    "Potato_leaf_early_blight",
+    "Potato_leaf_late_blight",
+    "Raspberry_leaf",
+    "Soyabean_leaf",
+    "Soybean_leaf",
+    "Squash_Powdery_mildew_leaf",
+    "Strawberry_leaf",
+    "Tomato_Early_blight_leaf",
+    "Tomato_Septoria_leaf_spot",
+    "Tomato_leaf",
+    "Tomato_leaf_bacterial_spot",
+    "Tomato_leaf_late_blight",
+    "Tomato_leaf_mosaic_virus",
+    "Tomato_leaf_yellow_virus",
+    "Tomato_mold_leaf",
+    "Tomato_two_spotted_spider_mites_leaf",
+    "grape_leaf",
+    "grape_leaf_black_rot",
+    "Corn_rust_leaf"
 ]
-NUM_CLASSES = len(LABELS)
+
+NUM_CLASSES = len(LABELS)  # This should be 27
 ID2LABEL = {i: label for i, label in enumerate(LABELS)}
 
 # Title
@@ -76,6 +95,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.info(f"**Model:** {MODEL_REPO}")
+    st.info(f"**Classes:** {NUM_CLASSES} (PlantDoc Dataset)")
     
     if hf_token:
         st.success("🔑 HF Token: Set")
@@ -220,10 +240,10 @@ if uploaded_file is not None:
                     st.code(traceback.format_exc())
                 st.stop()
     
-    # Check if healthy
-    is_healthy = "healthy" in label.lower()
+    # Check if healthy or disease
+    is_disease = any(keyword in label.lower() for keyword in ['blight', 'rust', 'spot', 'rot', 'virus', 'mildew', 'mites', 'mold'])
     
-    if is_healthy:
+    if not is_disease:
         st.success("✅ The plant appears healthy!")
     else:
         st.warning("⚠️ Disease detected. Get advice below.")
@@ -279,3 +299,4 @@ Be concise and clear."""
 # Footer
 st.markdown("---")
 st.markdown("💡 **Tip:** Use clear, well-lit images for best results.")
+st.caption("Dataset: PlantDoc (27 classes)")
