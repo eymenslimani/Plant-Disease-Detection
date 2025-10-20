@@ -1,5 +1,5 @@
 import streamlit as st
-from huggingface_hub import InferenceClient, hf_hub_download
+from huggingface_hub import hf_hub_download
 from PIL import Image
 import io
 import os
@@ -7,11 +7,13 @@ from groq import Groq
 import requests
 import json
 import torch
-from transformers import AutoImageProcessor, AutoModelForImageClassification
+import timm
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+from safetensors.torch import load_file
 
-# Set up Hugging Face Inference Client with token
-hf_token = st.secrets.get("HF_TOKEN", None)  # Get HF token if it exists
-hf_client = InferenceClient(token=hf_token)
+# Set up Hugging Face token if needed (for private repos, but yours is public)
+hf_token = st.secrets.get("HF_TOKEN", None)
 
 # Set up Groq client with your API key
 groq_TOKEN = st.secrets["GROQ_API_KEY"]
@@ -20,11 +22,31 @@ groq_client = Groq(api_key=groq_TOKEN)
 # Your Hugging Face model repo
 MODEL_REPO = "eymenslimani/plant-disease-detector"
 
+# Class labels from your model card (28 classes)
+LABELS = [
+    "Apple_Scab_Leaf", "Apple_cedar_apple_rust_leaf", "Apple_healthy_leaf",
+    "Bell_pepper_Bacterial_spot_leaf", "Bell_pepper_healthy_leaf",
+    "Blueberry_healthy_leaf", "Cherry_Powdery_mildew_leaf", "Cherry_healthy_leaf",
+    "Corn_Common_rust_leaf", "Corn_Gray_leaf_spot_leaf", "Corn_Northern_Leaf_Blight_leaf",
+    "Corn_healthy_leaf", "Grape_Black_Measles_leaf", "Grape_Black_rot_leaf",
+    "Grape_Leaf_blight_leaf", "Grape_healthy_leaf", "Peach_Bacterial_spot_leaf",
+    "Peach_healthy_leaf", "Potato_Early_blight_leaf", "Potato_Late_blight_leaf",
+    "Potato_healthy_leaf", "Raspberry_healthy_leaf", "Soybean_healthy_leaf",
+    "Squash_Powdery_mildew_leaf", "Strawberry_Leaf_scorch_leaf", "Strawberry_healthy_leaf",
+    "Tomato_Early_blight_leaf", "Tomato_Late_blight_leaf", "Tomato_Leaf_Mold_leaf",
+    "Tomato_Septoria_leaf_spot_leaf", "Tomato_Spider_mites_Two_spotted_spider_mite_leaf",
+    "Tomato_Target_Spot_leaf", "Tomato_Tomato_YellowLeaf_Curl_Virus_leaf",
+    "Tomato_Tomato_mosaic_virus_leaf", "Tomato_bacterial_spot_leaf", "Tomato_healthy_leaf",
+    "grape_leaf_black_rot"  # Note: This seems duplicated/rephrased in your card; adjust if needed
+]
+NUM_CLASSES = len(LABELS)
+ID2LABEL = {i: label for i, label in enumerate(LABELS)}
+
 # Title and description
 st.title("🌿 Plant Disease Detection")
 st.write("Upload a photo of a plant leaf to detect if it's healthy or diseased. If diseased, chat below for solutions and advice.")
 
-# Add model status checker in sidebar
+# Add model status checker in sidebar (unchanged)
 with st.sidebar:
     st.header("🔧 Debug Info")
     
@@ -76,89 +98,58 @@ if uploaded_file is not None:
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_container_width=True)
 
-    # Convert to bytes for inference
-    img_bytes = io.BytesIO()
-    image.save(img_bytes, format="JPEG")
-    img_bytes.seek(0)
-
     # Run inference
     with st.spinner("🔍 Analyzing image..."):
         try:
-            # Method 1: Try loading model directly with transformers
+            # Load model with caching
             @st.cache_resource
             def load_model():
-                try:
-                    processor = AutoImageProcessor.from_pretrained(MODEL_REPO, token=hf_token, trust_remote_code=True)
-                    model = AutoModelForImageClassification.from_pretrained(
-                        MODEL_REPO, 
-                        token=hf_token,
-                        trust_remote_code=True
-                    )
-                    return processor, model
-                except Exception as e:
-                    st.error(f"Model loading error: {str(e)}")
-                    raise
+                # Create base model from timm
+                model = timm.create_model('tf_efficientnetv2_m.in21k_ft_in1k', pretrained=False, num_classes=NUM_CLASSES)
+                
+                # Download and load weights (use safetensors for safety)
+                weights_path = hf_hub_download(repo_id=MODEL_REPO, filename="model.safetensors", token=hf_token)
+                state_dict = load_file(weights_path)
+                model.load_state_dict(state_dict)
+                
+                model.eval()  # Set to evaluation mode
+                return model
+
+            # Preprocessing transforms (from your model card: resize 256x256, normalize with ImageNet stats)
+            @st.cache_resource
+            def get_processor():
+                return A.Compose([
+                    A.Resize(height=256, width=256),
+                    A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                    ToTensorV2()
+                ])
+
+            with st.spinner("Loading model from HuggingFace... (this may take a minute on first load)"):
+                model = load_model()
+                processor = get_processor()
+
+            # Process image
+            img_array = np.array(image.convert("RGB"))  # Convert to numpy for albumentations
+            augmented = processor(image=img_array)
+            input_tensor = augmented['image'].unsqueeze(0)  # Add batch dim
+
+            # Get predictions
+            with torch.no_grad():
+                logits = model(input_tensor)
+                probs = torch.nn.functional.softmax(logits, dim=-1)
+
+            # Get top predictions
+            top_probs, top_indices = torch.topk(probs, k=min(3, NUM_CLASSES))
             
-            try:
-                with st.spinner("Loading model from HuggingFace... (this may take a minute on first load)"):
-                    processor, model = load_model()
-                
-                # Process image
-                inputs = processor(images=image, return_tensors="pt")
-                
-                # Get predictions
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    logits = outputs.logits
-                    probs = torch.nn.functional.softmax(logits, dim=-1)
-                    
-                # Get top predictions
-                top_probs, top_indices = torch.topk(probs, k=min(3, len(model.config.id2label)))
-                
-                result = []
-                for prob, idx in zip(top_probs[0], top_indices[0]):
-                    result.append({
-                        'label': model.config.id2label[idx.item()],
-                        'score': prob.item()
-                    })
-                
-                st.success("✅ Using direct model loading")
-                
-            except Exception as e1:
-                error_msg = str(e1)
-                st.warning(f"Direct loading failed: {error_msg[:200]}...")
-                
-                # Show detailed error
-                with st.expander("🔍 See full error"):
-                    st.code(error_msg)
-                
-                st.info("Trying InferenceClient...")
-                
-                # Method 2: Try InferenceClient
-                img_bytes.seek(0)
-                try:
-                    result = hf_client.image_classification(
-                        img_bytes, 
-                        model=MODEL_REPO,
-                    )
-                except Exception as e2:
-                    st.warning(f"InferenceClient failed: {str(e2)[:100]}")
-                    st.info("Trying direct API call...")
-                    
-                    # Method 3: Direct API call as fallback
-                    img_bytes.seek(0)
-                    API_URL = f"https://api-inference.huggingface.co/models/{MODEL_REPO}"
-                    headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
-                    
-                    response = requests.post(API_URL, headers=headers, data=img_bytes.read())
-                    
-                    if response.status_code == 503:
-                        raise Exception("Model is loading on HuggingFace servers. Please wait 1-2 minutes and try again.")
-                    elif response.status_code != 200:
-                        raise Exception(f"API returned status code {response.status_code}: {response.text[:200]}")
-                    
-                    result = response.json()
+            result = []
+            for prob, idx in zip(top_probs[0], top_indices[0]):
+                result.append({
+                    'label': ID2LABEL[idx.item()],
+                    'score': prob.item()
+                })
             
+            st.success("✅ Model loaded successfully using timm and PyTorch")
+
             # Sort results by confidence score
             result = sorted(result, key=lambda x: x['score'], reverse=True)
             
@@ -244,11 +235,10 @@ Be helpful, concise, and use simple language that farmers and gardeners can unde
             
             # Show detailed error for debugging
             with st.expander("🔍 See detailed error"):
-                st.code(str(e))
                 import traceback
                 st.code(traceback.format_exc())
             
-            st.info("**Possible issues:**\n\n1. **Model is still loading** - Wait 5-10 minutes after uploading your model\n2. **Image format issue** - Try a different image or convert to JPG\n3. **Model not public** - Check if your model is set to public on Hugging Face\n4. **Network issues** - Refresh and try again\n\n💡 **Quick fix:** Visit your model page at https://huggingface.co/eymenslimani/plant-disease-detector and try the Inference API widget there first.")
+            st.info("**Possible issues:**\n\n1. **Model is still loading** - Wait 5-10 minutes after uploading\n2. **Image format issue** - Try JPG\n3. **Dependencies missing** - Check requirements.txt\n4. **Network issues** - Refresh\n\n💡 Test model at https://huggingface.co/eymenslimani/plant-disease-detector")
 
 # Add footer with info
 st.markdown("---")
