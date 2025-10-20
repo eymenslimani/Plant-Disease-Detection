@@ -1,7 +1,8 @@
 streamlit
-huggingface_hub
-Pillow
-groq
-requests
 torch
-transformers
+timm
+albumentations
+safetensors  # For loading model.safetensors safely
+pillow
+huggingface_hub
+groq
