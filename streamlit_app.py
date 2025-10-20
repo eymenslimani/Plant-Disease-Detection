@@ -4,6 +4,7 @@ from PIL import Image
 import io
 import os
 import numpy as np
+import time
 from groq import Groq
 import requests
 import json
@@ -58,7 +59,7 @@ with st.sidebar:
         try:
             API_URL = f"https://api-inference.huggingface.co/models/{model_name}"
             headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
-            response = requests.get(API_URL, headers=headers)
+            response = requests.get(API_URL, headers=headers, timeout=10)
             
             st.write(f"**Testing:** `{model_name}`")
             st.write(f"**Status Code:** {response.status_code}")
@@ -102,18 +103,32 @@ if uploaded_file is not None:
     # Run inference
     with st.spinner("🔍 Analyzing image..."):
         try:
-            # Load model with caching and fallback
+            # Load model with caching and retry mechanism
             @st.cache_resource
             def load_model():
-                try:
-                    # First try safetensors
-                    weights_path = hf_hub_download(repo_id=MODEL_REPO, filename="model.safetensors", token=hf_token)
-                    state_dict = load_file(weights_path)
-                except Exception as e:
-                    st.warning(f"Failed to load model.safetensors: {str(e)[:100]}")
-                    st.info("Falling back to best_model.pth...")
-                    weights_path = hf_hub_download(repo_id=MODEL_REPO, filename="best_model.pth", token=hf_token)
-                    state_dict = torch.load(weights_path)
+                max_retries = 3
+                retry_delay = 10  # seconds
+                files_to_try = ["model.safetensors", "best_model.pth"]
+                
+                for file in files_to_try:
+                    for attempt in range(max_retries):
+                        try:
+                            weights_path = hf_hub_download(repo_id=MODEL_REPO, filename=file, token=hf_token)
+                            if file == "model.safetensors":
+                                state_dict = load_file(weights_path)
+                            else:  # best_model.pth
+                                state_dict = torch.load(weights_path)
+                            break
+                        except Exception as e:
+                            st.warning(f"Attempt {attempt + 1}/{max_retries} failed to load {file}: {str(e)[:100]}")
+                            if attempt < max_retries - 1:
+                                time.sleep(retry_delay)
+                            else:
+                                st.error(f"Failed to load {file} after {max_retries} attempts")
+                                raise
+                    else:
+                        continue
+                    break
                 
                 model = timm.create_model('tf_efficientnetv2_m.in21k_ft_in1k', pretrained=False, num_classes=NUM_CLASSES)
                 model.load_state_dict(state_dict)
@@ -243,7 +258,7 @@ Be helpful, concise, and use simple language that farmers and gardeners can unde
                 import traceback
                 st.code(traceback.format_exc())
             
-            st.info("**Possible issues:**\n\n1. **Model is still loading** - Wait 5-10 minutes after uploading\n2. **Image format issue** - Try JPG\n3. **Dependencies missing** - Check requirements.txt\n4. **Network issues** - Refresh\n\n💡 Test model at https://huggingface.co/eymenslimani/plant-disease-detector")
+            st.info("**Possible issues:**\n\n1. **Model is still loading** - Wait 5-10 minutes after uploading\n2. **Image format issue** - Try JPG\n3. **Dependencies missing** - Check requirements.txt\n4. **Network issues** - Refresh\n5. **HF Server Issue** - Try again later or contact HF support\n\n💡 Test model at https://huggingface.co/eymenslimani/plant-disease-detector")
 
 # Add footer with info
 st.markdown("---")
