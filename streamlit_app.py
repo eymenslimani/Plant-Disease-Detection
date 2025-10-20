@@ -27,8 +27,8 @@ else:
 # Model repository
 MODEL_REPO = "eymenslimani/plant-disease-detector"
 
-# PlantDoc Dataset - 27 classes (CORRECTED)
-LABELS = [
+# PlantDoc Dataset - 27 classes
+LABELS_27 = [
     "Apple_leaf",
     "Apple_rust_leaf",
     "Bell_pepper_leaf",
@@ -58,8 +58,23 @@ LABELS = [
     "Corn_rust_leaf"
 ]
 
-NUM_CLASSES = len(LABELS)  # This should be 27
-ID2LABEL = {i: label for i, label in enumerate(LABELS)}
+# Alternative 38 classes (PlantVillage style)
+LABELS_38 = [
+    "Apple_Apple_scab", "Apple_Black_rot", "Apple_Cedar_apple_rust", "Apple_healthy",
+    "Blueberry_healthy", "Cherry_(including_sour)_Powdery_mildew", "Cherry_(including_sour)_healthy",
+    "Corn_(maize)_Cercospora_leaf_spot_Gray_leaf_spot", "Corn_(maize)_Common_rust_",
+    "Corn_(maize)_Northern_Leaf_Blight", "Corn_(maize)_healthy",
+    "Grape_Black_rot", "Grape_Esca_(Black_Measles)", "Grape_Leaf_blight_(Isariopsis_Leaf_Spot)", "Grape_healthy",
+    "Orange_Haunglongbing_(Citrus_greening)", "Peach_Bacterial_spot", "Peach_healthy",
+    "Pepper,_bell_Bacterial_spot", "Pepper,_bell_healthy",
+    "Potato_Early_blight", "Potato_Late_blight", "Potato_healthy",
+    "Raspberry_healthy", "Soybean_healthy",
+    "Squash_Powdery_mildew", "Strawberry_Leaf_scorch", "Strawberry_healthy",
+    "Tomato_Bacterial_spot", "Tomato_Early_blight", "Tomato_Late_blight", "Tomato_Leaf_Mold",
+    "Tomato_Septoria_leaf_spot", "Tomato_Spider_mites_Two-spotted_spider_mite",
+    "Tomato_Target_Spot", "Tomato_Tomato_Yellow_Leaf_Curl_Virus", "Tomato_Tomato_mosaic_virus",
+    "Tomato_healthy"
+]
 
 # Title
 st.title("🌿 Plant Disease Detection")
@@ -95,7 +110,6 @@ with st.sidebar:
     
     st.markdown("---")
     st.info(f"**Model:** {MODEL_REPO}")
-    st.info(f"**Classes:** {NUM_CLASSES} (PlantDoc Dataset)")
     
     if hf_token:
         st.success("🔑 HF Token: Set")
@@ -108,16 +122,20 @@ with st.sidebar:
 # Load model
 @st.cache_resource(show_spinner=False)
 def load_model():
-    """Load model with proper PyTorch 2.6+ handling"""
+    """Load model with auto-detection of num_classes"""
     
-    configs_to_try = [
+    # Try different file formats and class counts
+    configs = [
+        ("model.safetensors", load_file),
         ("best_model.pth", lambda p: torch.load(p, map_location='cpu', weights_only=False)),
-        ("model.safetensors", lambda p: load_file(p)),
+        ("pytorch_model.bin", lambda p: torch.load(p, map_location='cpu', weights_only=False)),
     ]
     
-    for file_name, load_fn in configs_to_try:
+    num_classes_to_try = [27, 38, 30, 37, 39]  # Common numbers
+    
+    for file_name, load_fn in configs:
         try:
-            st.info(f"🔄 Downloading {file_name}...")
+            st.info(f"🔄 Trying {file_name}...")
             
             weights_path = hf_hub_download(
                 repo_id=MODEL_REPO,
@@ -138,39 +156,60 @@ def load_model():
                 elif 'model' in state_dict:
                     state_dict = state_dict['model']
             
-            # Create model
-            st.info("🏗️ Creating model...")
-            model = timm.create_model(
-                'tf_efficientnetv2_m.in21k_ft_in1k',
-                pretrained=False,
-                num_classes=NUM_CLASSES
-            )
+            # Try to detect num_classes from the state dict
+            detected_classes = None
+            for key in state_dict.keys():
+                if 'classifier' in key and 'weight' in key:
+                    weight_shape = state_dict[key].shape
+                    if len(weight_shape) >= 1:
+                        detected_classes = weight_shape[0]
+                        st.info(f"🔍 Detected {detected_classes} classes from model weights")
+                        break
             
-            # Try strict loading first
-            try:
-                model.load_state_dict(state_dict, strict=True)
-                st.success(f"✅ Model loaded from {file_name}")
-            except RuntimeError as e:
-                if "size mismatch" in str(e):
-                    st.warning("⚠️ Size mismatch, trying non-strict loading...")
-                    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-                    st.success(f"✅ Model loaded (non-strict) from {file_name}")
-                    if missing_keys:
-                        st.warning(f"Missing keys: {len(missing_keys)}")
-                    if unexpected_keys:
-                        st.warning(f"Unexpected keys: {len(unexpected_keys)}")
-                else:
-                    raise
+            # Add detected classes to the list to try first
+            if detected_classes and detected_classes not in num_classes_to_try:
+                num_classes_to_try.insert(0, detected_classes)
             
-            model.eval()
-            return model, file_name
+            # Try different numbers of classes
+            for num_classes in num_classes_to_try:
+                try:
+                    st.info(f"🏗️ Trying with {num_classes} classes...")
+                    
+                    model = timm.create_model(
+                        'tf_efficientnetv2_m.in21k_ft_in1k',
+                        pretrained=False,
+                        num_classes=num_classes
+                    )
+                    
+                    # Try loading
+                    model.load_state_dict(state_dict, strict=True)
+                    st.success(f"✅ Success! Model has {num_classes} classes")
+                    
+                    model.eval()
+                    
+                    # Select appropriate labels
+                    if num_classes == 27:
+                        labels = LABELS_27
+                    elif num_classes == 38:
+                        labels = LABELS_38
+                    else:
+                        labels = [f"Class_{i}" for i in range(num_classes)]
+                    
+                    return model, file_name, num_classes, labels
+                    
+                except RuntimeError as e:
+                    if "size mismatch" not in str(e):
+                        st.warning(f"⚠️ {num_classes} classes: {str(e)[:80]}")
+                    continue
+            
+            st.warning(f"❌ Could not match any class count for {file_name}")
             
         except Exception as e:
-            st.warning(f"❌ {file_name} failed: {str(e)[:100]}")
+            st.warning(f"⚠️ {file_name}: {str(e)[:100]}")
             continue
     
-    st.error("❌ Could not load model")
-    st.error(f"**Check:** Make sure NUM_CLASSES={NUM_CLASSES} matches your training setup")
+    st.error("❌ Could not load model with any configuration")
+    st.error("Try checking your model file or contact the model creator")
     raise Exception("Failed to load model")
 
 # Preprocessing
@@ -196,8 +235,10 @@ if uploaded_file is not None:
         with st.spinner("🔍 Analyzing..."):
             try:
                 # Load model
-                model, model_file = load_model()
+                model, model_file, num_classes, labels = load_model()
                 processor = get_processor()
+                
+                st.info(f"📊 Using model with {num_classes} classes")
                 
                 # Process image
                 img_array = np.array(image.convert("RGB"))
@@ -210,16 +251,16 @@ if uploaded_file is not None:
                     probs = torch.nn.functional.softmax(logits, dim=-1)
                 
                 # Get top predictions
-                top_probs, top_indices = torch.topk(probs, k=min(3, NUM_CLASSES))
+                top_probs, top_indices = torch.topk(probs, k=min(5, num_classes))
                 
                 result = []
                 for prob, idx in zip(top_probs[0], top_indices[0]):
+                    idx_val = idx.item()
+                    label = labels[idx_val] if idx_val < len(labels) else f"Class_{idx_val}"
                     result.append({
-                        'label': ID2LABEL[idx.item()],
+                        'label': label,
                         'score': prob.item()
                     })
-                
-                result = sorted(result, key=lambda x: x['score'], reverse=True)
                 
                 # Display prediction
                 top_prediction = result[0]
@@ -229,8 +270,8 @@ if uploaded_file is not None:
                 st.success(f"**Prediction:** {label}")
                 st.metric("Confidence", f"{confidence:.2f}%")
                 
-                with st.expander("📊 View all predictions"):
-                    for i, pred in enumerate(result[:3], 1):
+                with st.expander("📊 Top 5 predictions"):
+                    for i, pred in enumerate(result[:5], 1):
                         st.write(f"{i}. **{pred['label']}** - {pred['score']*100:.2f}%")
                 
             except Exception as e:
@@ -241,9 +282,12 @@ if uploaded_file is not None:
                 st.stop()
     
     # Check if healthy or disease
-    is_disease = any(keyword in label.lower() for keyword in ['blight', 'rust', 'spot', 'rot', 'virus', 'mildew', 'mites', 'mold'])
+    is_disease = any(keyword in label.lower() for keyword in 
+                    ['blight', 'rust', 'spot', 'rot', 'virus', 'mildew', 'mites', 'mold', 'scab', 'scorch'])
     
-    if not is_disease:
+    if not is_disease and 'healthy' not in label.lower():
+        st.info("ℹ️ Classification complete. Check the disease keywords for details.")
+    elif 'healthy' in label.lower():
         st.success("✅ The plant appears healthy!")
     else:
         st.warning("⚠️ Disease detected. Get advice below.")
@@ -299,4 +343,3 @@ Be concise and clear."""
 # Footer
 st.markdown("---")
 st.markdown("💡 **Tip:** Use clear, well-lit images for best results.")
-st.caption("Dataset: PlantDoc (27 classes)")
