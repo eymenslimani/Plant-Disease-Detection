@@ -3,6 +3,7 @@ from huggingface_hub import hf_hub_download
 from PIL import Image
 import io
 import os
+import numpy as np
 from groq import Groq
 import requests
 import json
@@ -37,7 +38,7 @@ LABELS = [
     "Tomato_Septoria_leaf_spot_leaf", "Tomato_Spider_mites_Two_spotted_spider_mite_leaf",
     "Tomato_Target_Spot_leaf", "Tomato_Tomato_YellowLeaf_Curl_Virus_leaf",
     "Tomato_Tomato_mosaic_virus_leaf", "Tomato_bacterial_spot_leaf", "Tomato_healthy_leaf",
-    "grape_leaf_black_rot"  # Note: This seems duplicated/rephrased in your card; adjust if needed
+    "grape_leaf_black_rot"
 ]
 NUM_CLASSES = len(LABELS)
 ID2LABEL = {i: label for i, label in enumerate(LABELS)}
@@ -46,7 +47,7 @@ ID2LABEL = {i: label for i, label in enumerate(LABELS)}
 st.title("🌿 Plant Disease Detection")
 st.write("Upload a photo of a plant leaf to detect if it's healthy or diseased. If diseased, chat below for solutions and advice.")
 
-# Add model status checker in sidebar (unchanged)
+# Add model status checker in sidebar
 with st.sidebar:
     st.header("🔧 Debug Info")
     
@@ -101,21 +102,25 @@ if uploaded_file is not None:
     # Run inference
     with st.spinner("🔍 Analyzing image..."):
         try:
-            # Load model with caching
+            # Load model with caching and fallback
             @st.cache_resource
             def load_model():
-                # Create base model from timm
+                try:
+                    # First try safetensors
+                    weights_path = hf_hub_download(repo_id=MODEL_REPO, filename="model.safetensors", token=hf_token)
+                    state_dict = load_file(weights_path)
+                except Exception as e:
+                    st.warning(f"Failed to load model.safetensors: {str(e)[:100]}")
+                    st.info("Falling back to best_model.pth...")
+                    weights_path = hf_hub_download(repo_id=MODEL_REPO, filename="best_model.pth", token=hf_token)
+                    state_dict = torch.load(weights_path)
+                
                 model = timm.create_model('tf_efficientnetv2_m.in21k_ft_in1k', pretrained=False, num_classes=NUM_CLASSES)
-                
-                # Download and load weights (use safetensors for safety)
-                weights_path = hf_hub_download(repo_id=MODEL_REPO, filename="model.safetensors", token=hf_token)
-                state_dict = load_file(weights_path)
                 model.load_state_dict(state_dict)
-                
                 model.eval()  # Set to evaluation mode
                 return model
 
-            # Preprocessing transforms (from your model card: resize 256x256, normalize with ImageNet stats)
+            # Preprocessing transforms
             @st.cache_resource
             def get_processor():
                 return A.Compose([
@@ -129,7 +134,7 @@ if uploaded_file is not None:
                 processor = get_processor()
 
             # Process image
-            img_array = np.array(image.convert("RGB"))  # Convert to numpy for albumentations
+            img_array = np.array(image.convert("RGB"))
             augmented = processor(image=img_array)
             input_tensor = augmented['image'].unsqueeze(0)  # Add batch dim
 
@@ -167,7 +172,7 @@ if uploaded_file is not None:
                 for i, pred in enumerate(result[:3], 1):
                     st.write(f"{i}. **{pred['label']}** - {pred['score']*100:.2f}%")
 
-            # Check if healthy (adjust based on your model's labels)
+            # Check if healthy
             is_healthy = "healthy" in label.lower()
 
             if is_healthy:
@@ -184,7 +189,7 @@ if uploaded_file is not None:
                     st.session_state.current_diagnosis = label
                     st.session_state.messages = []  # Reset chat for new diagnosis
 
-                # System prompt for LLM, primed with diagnosis
+                # System prompt for LLM
                 system_prompt = f"""You are a plant disease expert assistant. The diagnosed disease is '{label}' with {confidence:.1f}% confidence.
 
 Provide:
