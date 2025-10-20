@@ -1,13 +1,10 @@
 import streamlit as st
 from huggingface_hub import hf_hub_download
 from PIL import Image
-import io
-import os
 import numpy as np
 import time
 from groq import Groq
 import requests
-import json
 import torch
 import timm
 import albumentations as A
@@ -27,10 +24,10 @@ else:
     st.error("❌ GROQ_API_KEY not found in secrets!")
     st.stop()
 
-# Your Hugging Face model repo
+# Model repository
 MODEL_REPO = "eymenslimani/plant-disease-detector"
 
-# Class labels (37 classes based on your code)
+# Class labels (37 classes)
 LABELS = [
     "Apple_Scab_Leaf", "Apple_cedar_apple_rust_leaf", "Apple_healthy_leaf",
     "Bell_pepper_Bacterial_spot_leaf", "Bell_pepper_healthy_leaf",
@@ -50,11 +47,11 @@ LABELS = [
 NUM_CLASSES = len(LABELS)
 ID2LABEL = {i: label for i, label in enumerate(LABELS)}
 
-# Title and description
+# Title
 st.title("🌿 Plant Disease Detection")
 st.write("Upload a photo of a plant leaf to detect if it's healthy or diseased.")
 
-# Sidebar Debug Info
+# Sidebar
 with st.sidebar:
     st.header("🔧 Debug Info")
     
@@ -76,42 +73,34 @@ with st.sidebar:
                     "id": model_info.get("id"),
                     "author": model_info.get("author"),
                     "lastModified": model_info.get("lastModified"),
-                    "downloads": model_info.get("downloads", 0)
                 })
-            elif response.status_code == 404:
-                st.error("❌ Model NOT FOUND")
-                st.info("👉 Visit: https://huggingface.co/" + model_name)
-            elif response.status_code == 401:
-                st.error("❌ Unauthorized")
             else:
                 st.error(f"❌ Error: {response.status_code}")
         except Exception as e:
             st.error(f"Error: {str(e)}")
     
     st.markdown("---")
-    st.info(f"**Current Model:** {MODEL_REPO}")
+    st.info(f"**Model:** {MODEL_REPO}")
     
     if hf_token:
-        st.success(f"🔑 HF Token: Set")
+        st.success("🔑 HF Token: Set")
     else:
-        st.warning("🔑 HF Token: Not set (may cause issues)")
+        st.warning("🔑 HF Token: Not set")
     
     if groq_TOKEN:
         st.success("🔑 Groq Token: Set")
 
-# Load model with better error handling
+# Load model
 @st.cache_resource(show_spinner=False)
 def load_model():
-    """Load model with proper error handling for PyTorch 2.6+"""
+    """Load model with proper PyTorch 2.6+ handling"""
     
-    # Try different model files and configurations
     configs_to_try = [
-        # (filename, load_function, model_architecture)
-        ("best_model.pth", lambda p: torch.load(p, map_location='cpu', weights_only=False), 'tf_efficientnetv2_m.in21k_ft_in1k'),
-        ("model.safetensors", lambda p: load_file(p), 'tf_efficientnetv2_m.in21k_ft_in1k'),
+        ("best_model.pth", lambda p: torch.load(p, map_location='cpu', weights_only=False)),
+        ("model.safetensors", lambda p: load_file(p)),
     ]
     
-    for file_name, load_fn, arch in configs_to_try:
+    for file_name, load_fn in configs_to_try:
         try:
             st.info(f"🔄 Downloading {file_name}...")
             
@@ -123,34 +112,38 @@ def load_model():
             )
             
             st.success(f"✅ Downloaded {file_name}")
-            st.info(f"📦 Loading weights...")
             
             # Load state dict
             state_dict = load_fn(weights_path)
             
-            # Handle different state dict formats
-            if isinstance(state_dict, dict) and 'state_dict' in state_dict:
-                state_dict = state_dict['state_dict']
-            elif isinstance(state_dict, dict) and 'model' in state_dict:
-                state_dict = state_dict['model']
+            # Handle nested dicts
+            if isinstance(state_dict, dict):
+                if 'state_dict' in state_dict:
+                    state_dict = state_dict['state_dict']
+                elif 'model' in state_dict:
+                    state_dict = state_dict['model']
             
             # Create model
-            st.info(f"🏗️ Creating model architecture...")
+            st.info("🏗️ Creating model...")
             model = timm.create_model(
-                arch,
+                'tf_efficientnetv2_m.in21k_ft_in1k',
                 pretrained=False,
                 num_classes=NUM_CLASSES
             )
             
-            # Load weights with strict=False to allow partial loading
+            # Try strict loading first
             try:
                 model.load_state_dict(state_dict, strict=True)
-                st.success(f"✅ Model loaded successfully from {file_name}")
+                st.success(f"✅ Model loaded from {file_name}")
             except RuntimeError as e:
                 if "size mismatch" in str(e):
-                    st.warning(f"⚠️ Size mismatch detected, trying non-strict loading...")
-                    model.load_state_dict(state_dict, strict=False)
+                    st.warning("⚠️ Size mismatch, trying non-strict loading...")
+                    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
                     st.success(f"✅ Model loaded (non-strict) from {file_name}")
+                    if missing_keys:
+                        st.warning(f"Missing keys: {len(missing_keys)}")
+                    if unexpected_keys:
+                        st.warning(f"Unexpected keys: {len(unexpected_keys)}")
                 else:
                     raise
             
@@ -158,27 +151,12 @@ def load_model():
             return model, file_name
             
         except Exception as e:
-            error_msg = str(e)
-            st.warning(f"❌ Failed to load {file_name}: {error_msg[:150]}...")
+            st.warning(f"❌ {file_name} failed: {str(e)[:100]}")
             continue
     
-    # If all attempts fail, show detailed error
-    st.error("❌ Could not load model from any available file")
-    st.error("""
-    **Possible Solutions:**
-    
-    1. **Re-export your model**: The model architecture doesn't match the saved weights.
-       ```python
-       # In your training script, save with:
-       torch.save(model.state_dict(), 'best_model.pth')
-       ```
-    
-    2. **Check NUM_CLASSES**: Make sure NUM_CLASSES matches your training (currently: {})
-    
-    3. **Manual fix**: Download the model and check the architecture used during training
-    """.format(NUM_CLASSES))
-    
-    raise Exception("Failed to load model from HuggingFace")
+    st.error("❌ Could not load model")
+    st.error(f"**Check:** Make sure NUM_CLASSES={NUM_CLASSES} matches your training setup")
+    raise Exception("Failed to load model")
 
 # Preprocessing
 @st.cache_resource
@@ -193,28 +171,25 @@ def get_processor():
 uploaded_file = st.file_uploader("Choose a plant leaf image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Display uploaded image
     image = Image.open(uploaded_file)
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.image(image, caption="Uploaded Image", use_container_width=True)
+        st.image(image, caption="Uploaded Image")
     
     with col2:
-        with st.spinner("🔍 Analyzing image..."):
+        with st.spinner("🔍 Analyzing..."):
             try:
                 # Load model
                 model, model_file = load_model()
                 processor = get_processor()
-                
-                st.success(f"✅ Model loaded from: {model_file}")
                 
                 # Process image
                 img_array = np.array(image.convert("RGB"))
                 augmented = processor(image=img_array)
                 input_tensor = augmented['image'].unsqueeze(0)
                 
-                # Get predictions
+                # Predict
                 with torch.no_grad():
                     logits = model(input_tensor)
                     probs = torch.nn.functional.softmax(logits, dim=-1)
@@ -229,49 +204,34 @@ if uploaded_file is not None:
                         'score': prob.item()
                     })
                 
-                # Sort by confidence
                 result = sorted(result, key=lambda x: x['score'], reverse=True)
                 
-                # Get top prediction
+                # Display prediction
                 top_prediction = result[0]
                 label = top_prediction['label']
                 confidence = top_prediction['score'] * 100
                 
-                # Display prediction
                 st.success(f"**Prediction:** {label}")
                 st.metric("Confidence", f"{confidence:.2f}%")
                 
-                # Show top 3 predictions
                 with st.expander("📊 View all predictions"):
                     for i, pred in enumerate(result[:3], 1):
                         st.write(f"{i}. **{pred['label']}** - {pred['score']*100:.2f}%")
                 
             except Exception as e:
-                st.error(f"❌ Error during analysis: {str(e)}")
-                
-                with st.expander("🔍 See detailed error"):
+                st.error(f"❌ Error: {str(e)}")
+                with st.expander("🔍 Details"):
                     import traceback
                     st.code(traceback.format_exc())
-                
-                st.info("""
-                **Troubleshooting:**
-                
-                1. **500 Server Error** - HuggingFace servers are having issues. Try again in 15-30 minutes.
-                2. **Model not found** - Verify model exists at: https://huggingface.co/eymenslimani/plant-disease-detector
-                3. **Token issues** - Add HF_TOKEN to Streamlit secrets if model is private
-                4. **Network timeout** - Check your internet connection
-                
-                **Alternative:** Download model files manually and deploy locally.
-                """)
                 st.stop()
     
     # Check if healthy
     is_healthy = "healthy" in label.lower()
     
     if is_healthy:
-        st.success("✅ The plant appears healthy! No further action needed.")
+        st.success("✅ The plant appears healthy!")
     else:
-        st.warning("⚠️ Disease detected. Get treatment advice below.")
+        st.warning("⚠️ Disease detected. Get advice below.")
         
         # Initialize chat
         if "messages" not in st.session_state:
@@ -282,33 +242,29 @@ if uploaded_file is not None:
             st.session_state.messages = []
         
         # System prompt
-        system_prompt = f"""You are a plant disease expert. The diagnosed disease is '{label}' with {confidence:.1f}% confidence.
+        system_prompt = f"""You are a plant disease expert. Diagnosed: '{label}' ({confidence:.1f}% confidence).
 
 Provide:
-1. Brief explanation of the disease
-2. Practical treatment solutions
+1. Disease explanation
+2. Treatment solutions
 3. Prevention tips
-4. Answer follow-up questions
+4. Answer questions
 
-Be concise and use simple language."""
+Be concise and clear."""
         
-        # Display chat
-        st.markdown("### 💬 Chat for Solutions")
+        # Chat interface
+        st.markdown("### 💬 Ask for Solutions")
         
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
         
-        # User input
-        if prompt := st.chat_input("Ask about solutions or more details..."):
+        if prompt := st.chat_input("Ask about treatment..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
             
-            # Generate response
-            messages = [
-                {"role": "system", "content": system_prompt},
-            ] + st.session_state.messages
+            messages = [{"role": "system", "content": system_prompt}] + st.session_state.messages
             
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
@@ -327,4 +283,4 @@ Be concise and use simple language."""
 
 # Footer
 st.markdown("---")
-st.markdown("💡 **Tip:** Upload clear, well-lit images of plant leaves for best results.")
+st.markdown("💡 **Tip:** Use clear, well-lit images for best results.")
