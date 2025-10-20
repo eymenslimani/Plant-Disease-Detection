@@ -302,7 +302,7 @@ Be practical, concise, and farmer-friendly in your responses."""
                     
                     chat_completion = groq_client.chat.completions.create(
                         messages=messages,
-                        model="mixtral-8x7b-32768",
+                        model="llama-3.1-70b-versatile",
                         temperature=0.7,
                         max_tokens=1000,
                     )
